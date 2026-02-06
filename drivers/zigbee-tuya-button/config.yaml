@@ -2,3 +2,5 @@ name: 'zigbee-4-button'
 packageKey: 'zigbee-4-button'
 permissions:
   zigbee: { }
+channels:
+  - "7b82f8e5-ef98-49d7-955c-6c4e5ebe95ce" 
