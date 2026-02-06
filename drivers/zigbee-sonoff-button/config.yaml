@@ -1,4 +1,0 @@
-name: 'zigbee-sonoff-button'
-packageKey: 'zigbee-sonoff-button'
-permissions:
-  zigbee: { }
