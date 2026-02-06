@@ -22,34 +22,45 @@ local function get_ep_offset(device)
   return device.fingerprinted_endpoint_id - 1
 end
 
+-- **UPDATED: Full battery + payload logging handler**
 local button_handler_EF00 = function(driver, device, zb_rx)
-  log.info("<<---- Moon ---->> multi / button_handler zb_rx.body.zcl_body.body_bytes", zb_rx.body.zcl_body.body_bytes)
-  -- https://drive.google.com/file/d/1WaoM80xPi2TMsf-Z-itKLr2p7VKFZ5xh/view
-  -- maybe battery...
-  -- to do: battery handling
-  if zb_rx.body.zcl_body.body_bytes:byte(3) == 10 then
+  local body_bytes = zb_rx.body.zcl_body.body_bytes
+  
+  -- **NEW: Log FULL raw payload**
+  local hex_dump = ""
+  for i = 1, #body_bytes do
+    hex_dump = hex_dump .. string.format("%02X ", body_bytes:byte(i))
+  end
+  log.info("<<---- Moon ---->> FULL PAYLOAD hex: " .. hex_dump)
+  log.info("<<---- Moon ---->> FULL PAYLOAD length: " .. #body_bytes)
+  
+  -- **NEW: Battery handling (your noted byte 3 == 10)**
+  local msg_type = body_bytes:byte(3)
+  if msg_type == 10 then
+    log.info("<<---- Moon ---->> BATTERY MESSAGE detected!")
+    -- Common battery positions for Tuya - we'll confirm with logs
+    local battery = body_bytes:byte(5) or body_bytes:byte(7)
+    if battery and battery >= 0 and battery <= 100 then
+      device:emit_event(capabilities.battery.battery(battery))
+      log.info("<<---- Moon ---->> Battery emitted: " .. battery .. "%")
+    else
+      log.warn("<<---- Moon ---->> Battery byte invalid: " .. (battery or "nil"))
+    end
     return
   end
-  -- DTH
-  -- buttonNumber = zigbee.convertHexToInt(descMap?.data[2])
-  -- buttonState = zigbee.convertHexToInt(descMap?.data[6])
-  -- Note: Groovy Array start 0, Lua Index start 1
+  
+  -- **EXISTING: Button handling**
+  local component_id = string.format("button%d", msg_type)
+  log.info("<<---- Moon ---->> button_handler component_id", component_id)
 
-  local component_id = string.format("button%d", zb_rx.body.zcl_body.body_bytes:byte(3))
-  log.info("<<---- Moon ---->> multi / button_handler component_id", component_id)
-
-  -- 00: click, 01: double click, 02: held
-  local clickType = zb_rx.body.zcl_body.body_bytes:byte(7)
+  local clickType = body_bytes:byte(7)
+  log.info("<<---- Moon ---->> button_handler clickType", clickType)
   local ev
-  log.info("<<---- Moon ---->> multi / button_handler clickType", clickType)
   if clickType == 0 then
-    log.info("<<---- Moon ---->> multi / button_handler clickType-0")
     ev = capabilities.button.button.pushed()
   elseif clickType == 1 then
-    log.info("<<---- Moon ---->> multi / button_handler clickType-1")
     ev = capabilities.button.button.double()
   elseif clickType == 2 then
-    log.info("<<---- Moon ---->> multi / button_handler clickType-2")
     ev = capabilities.button.button.held()
   end
 
@@ -63,16 +74,14 @@ local device_added = function(driver, device)
   log.info("<<---- Moon ---->> multi / device_added")
 
   for key, value in pairs(device.profile.components) do
-    log.info("<<---- Moon ---->> multi / device_added - component : ", key)
+    log.info("<<---- Moon ---->> device_added - component : ", key)
     device.profile.components[key]:emit_event(capabilities.button.supportedButtonValues({ "pushed", "double", "held" }))
     device.profile.components[key]:emit_event(capabilities.button.button.pushed())
   end
 end
 
 local device_doconfigure = function(self, device)
-  log.info("<<---- Moon ---->> multi / configure_device")
-  -- todo: need to bind monitored attribute since this device don't have 0001 cluster
-  -- so there might be no default reporting cluster. It can cause health check fail or button might need to wake up
+  log.info("<<---- Moon ---->> configure_device")
   device:configure()
 end
 
@@ -98,18 +107,27 @@ end
 
 local tuya_ef00 = {
   NAME = "tuya ef00",
-  zigbee_handlers = {
-    cluster = {
-      -- No Attr Data from zb_rx, so it should use cluster handler
-      [0xEF00] = {
-        -- ZCLCommandId
-        [0x01] = button_handler_EF00
-      },
-    },
-  },
   lifecycle_handlers = {
     added = device_added,
     doConfigure = device_doconfigure,
+  },
+  zigbee_handlers = {
+    cluster = {
+      -- **NEW: Standard Zigbee battery (PowerConfig cluster)**
+      [0x0001] = {
+        [0x0021] = {  -- BatteryPercentageRemaining
+          on_receive = function(driver, device, zb_rx)
+            local battery = zb_rx.body.zcl_body.data.value.value
+            log.info("<<---- Moon ---->> STANDARD Battery report: " .. battery .. "%")
+            device:emit_event(capabilities.battery.battery(battery))
+          end,
+        },
+      },
+      -- **EXISTING EF00 handler (now with battery + logging)**
+      [0xEF00] = {
+        [0x01] = button_handler_EF00
+      },
+    },
   },
   can_handle = is_tuya_ef00,
 }
